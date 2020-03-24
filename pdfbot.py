@@ -28,7 +28,10 @@ logger = logging.getLogger(__name__)
 # context. Error handlers also receive the raised TelegramError object in error.
 def start(update, context):
     """Send a message when the command /start is issued."""
-    update.message.reply_text('Hi!')
+    update.message.reply_text(
+        'Hi! You can send me images and I will convert them to pdf and send them back to you. '
+        'Please send the images as files (photos get compressed). '
+        'If you want the output to be A4 format use the caption "A4".')
 
 
 def help(update, context):
@@ -45,13 +48,21 @@ def convert_image(update, context):
     """Convert the sent image to pdf and send it back."""
     file_id = update.message.document.file_id
     file_name = update.message.document.file_name
+    file_desc = update.message.caption
     new_file = context.bot.get_file(file_id)
     temp_name = os.path.join("/mnt/ramdisk", file_id + file_name)
     print(temp_name)
     new_file.download(custom_path=temp_name)
     print("File saved")
+
+    a4inpt = (img2pdf.mm_to_pt(210), img2pdf.mm_to_pt(297))
+    if file_desc == "A4":
+        layout_fun = img2pdf.get_layout_fun(a4inpt)
+    else:
+        layout_fun = img2pdf.get_layout_fun()
+
     with open(temp_name + ".pdf", "wb") as f:
-        f.write(img2pdf.convert(temp_name))
+        f.write(img2pdf.convert(temp_name, layout_fun=layout_fun))
     context.bot.send_document(
         chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), file_name=file_name)
     print("File send")
