@@ -18,7 +18,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    level=logging.DEBUG)
+                    level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,26 @@ def help(update, context):
 def echo(update, context):
     """Echo the user message."""
     update.message.reply_text(update.message.text)
+
+
+def convert_image(update, context):
+    """Convert the sent image to pdf and send it back."""
+    file_id = update.message.document.file_id
+    file_name = update.message.document.file_name
+    new_file = context.bot.get_file(file_id)
+    temp_name = os.path.join("/mnt/ramdisk", file_id + file_name)
+    print(temp_name)
+    new_file.download(custom_path=temp_name)
+    print("File saved")
+    context.bot.send_document(chat_id=update.effective_chat.id, document=open(temp_name, 'rb'), file_name=file_name)
+    print("File send")
+    os.remove(temp_name)
+    print("File removed")
+
+
+def info_photo(update, context):
+    """Send info that one should send images as files."""
+    update.message.reply_text("Please send images as files.")
 
 
 def error(update, context):
@@ -62,6 +82,8 @@ def main():
 
     # on noncommand i.e message - echo the message on Telegram
     dp.add_handler(MessageHandler(Filters.text, echo))
+    dp.add_handler(MessageHandler(Filters.document.category("image"), convert_image))
+    dp.add_handler(MessageHandler(Filters.photo, info_photo))
 
     # log all errors
     dp.add_error_handler(error)
