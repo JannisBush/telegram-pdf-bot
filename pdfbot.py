@@ -98,7 +98,7 @@ def convert_image(update, context):
     conv_image(temp_name, file_desc)
 
     context.bot.send_document(
-        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), filename=file_name)
+        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), filename=file_name + ".pdf")
     print("File send")
 
     cleanup(temp_name)
