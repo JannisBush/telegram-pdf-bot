@@ -14,6 +14,7 @@ bot.
 import os
 import logging
 
+import img2pdf
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 # Enable logging
@@ -49,9 +50,13 @@ def convert_image(update, context):
     print(temp_name)
     new_file.download(custom_path=temp_name)
     print("File saved")
-    context.bot.send_document(chat_id=update.effective_chat.id, document=open(temp_name, 'rb'), file_name=file_name)
+    with open(temp_name + ".pdf", "wb") as f:
+        f.write(img2pdf.convert(temp_name))
+    context.bot.send_document(
+        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), file_name=file_name)
     print("File send")
     os.remove(temp_name)
+    os.remove(temp_name + ".pdf")
     print("File removed")
 
 
