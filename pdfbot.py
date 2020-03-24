@@ -13,15 +13,63 @@ bot.
 
 import os
 import logging
+import uuid
+import shutil
 
 import img2pdf
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from PyPDF2 import PdfFileMerger
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler
 
 # Enable logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     level=logging.INFO)
 
 logger = logging.getLogger(__name__)
+
+SENDING = range(1)
+
+
+def conv_image(file_name, args):
+    """Convert an image to pdf."""
+    a4inpt = (img2pdf.mm_to_pt(210), img2pdf.mm_to_pt(297))
+    if args == "A4":
+        layout_fun = img2pdf.get_layout_fun(a4inpt)
+    else:
+        layout_fun = img2pdf.get_layout_fun()
+
+    with open(file_name + ".pdf", "wb") as f:
+        f.write(img2pdf.convert(file_name, layout_fun=layout_fun))
+
+    return True
+
+
+def cleanup(file_name):
+    """Cleanup files"""
+    os.remove(file_name)
+    os.remove(file_name + ".pdf")
+    print("File removed")
+
+
+def get_image(update, context, mode="Single"):
+    file_id = update.message.document.file_id
+    file_name = update.message.document.file_name
+    file_desc = update.message.caption
+    new_file = context.bot.get_file(file_id)
+    if mode == "Folder":
+        temp_name = os.path.join("/mnt/ramdisk", context.chat_data["idd"], file_id + file_name)
+    else:
+        temp_name = os.path.join("/mnt/ramdisk", file_id + file_name)
+    new_file.download(custom_path=temp_name)
+    print("File saved")
+    return file_name, file_desc, temp_name
+
+
+def join_pdfs(pdfs, idd):
+    merger = PdfFileMerger()
+    for pdf in pdfs:
+        merger.append(pdf)
+    merger.write(os.path.join("/mnt/ramdisk", idd, "result.pdf"))
+    merger.close()
 
 
 # Define a few command handlers. These usually take the two arguments update and
@@ -46,39 +94,85 @@ def echo(update, context):
 
 def convert_image(update, context):
     """Convert the sent image to pdf and send it back."""
-    file_id = update.message.document.file_id
-    file_name = update.message.document.file_name
-    file_desc = update.message.caption
-    new_file = context.bot.get_file(file_id)
-    temp_name = os.path.join("/mnt/ramdisk", file_id + file_name)
-    print(temp_name)
-    new_file.download(custom_path=temp_name)
-    print("File saved")
+    file_name, file_desc, temp_name = get_image(update, context)
+    conv_image(temp_name, file_desc)
 
-    a4inpt = (img2pdf.mm_to_pt(210), img2pdf.mm_to_pt(297))
-    if file_desc == "A4":
-        layout_fun = img2pdf.get_layout_fun(a4inpt)
-    else:
-        layout_fun = img2pdf.get_layout_fun()
-
-    with open(temp_name + ".pdf", "wb") as f:
-        f.write(img2pdf.convert(temp_name, layout_fun=layout_fun))
     context.bot.send_document(
-        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), file_name=file_name)
+        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), filename=file_name)
     print("File send")
-    os.remove(temp_name)
-    os.remove(temp_name + ".pdf")
-    print("File removed")
+
+    cleanup(temp_name)
 
 
 def info_photo(update, context):
     """Send info that one should send images as files."""
     update.message.reply_text("Please send images as files.")
+    return SENDING
 
 
 def error(update, context):
     """Log Errors caused by Updates."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
+
+
+def join(update, context):
+    context.chat_data["idd"] = str(uuid.uuid4())
+    folder_name = os.path.join("/mnt/ramdisk", context.chat_data["idd"])
+    os.mkdir(folder_name)
+    context.chat_data["images"] = []
+    context.chat_data["folder"] = folder_name
+    context.chat_data["name"] = "result"
+    update.message.reply_text("Send images and /done when finished")
+    return SENDING
+
+
+def add_image(update, context):
+    # Do something
+    file_name, file_desc, temp_name = get_image(update, context, mode="Folder")
+    conv_image(temp_name, file_desc)
+    os.remove(temp_name)
+    context.chat_data["images"].append(temp_name + ".pdf")
+    return SENDING
+
+
+def add_pdf(update, context):
+    # Do something
+    file_name, file_desc, temp_name = get_image(update, context, mode="Folder")
+    context.chat_data["images"].append(temp_name)
+    return SENDING
+
+
+def set_title(update, context):
+    if len(context.args) != 0:
+        context.chat_data["name"] = context.args[0]
+    else:
+        update.message.reply_text("Please enter a name for the document.")
+    return SENDING
+
+
+def done(update, context):
+    chat_data = context.chat_data
+    if chat_data is None:
+        chat_data = next(iter(context.job.context.dispatcher.chat_data.values()))
+        print("timeout")
+    print(chat_data)
+
+    if len(chat_data["images"]) != 0:
+        join_pdfs(chat_data["images"], chat_data["idd"])
+        context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=open(os.path.join("/mnt/ramdisk", chat_data["idd"], "result.pdf"), 'rb'),
+            filename=chat_data["name"] + ".pdf")
+        print("File send")
+
+    try:
+        shutil.rmtree(chat_data["folder"])
+    except OSError as e:
+        print("Error: %s : %s" % (chat_data["folder"], e.strerror))
+
+    update.message.reply_text("Finished")
+    chat_data.clear()
+    return ConversationHandler.END
 
 
 def main():
@@ -91,6 +185,21 @@ def main():
 
     # Get the dispatcher to register handlers
     dp = updater.dispatcher
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("join", join)],
+        states={
+            SENDING: [MessageHandler(Filters.document.category("image"), add_image),
+                      MessageHandler(Filters.document.mime_type("application/pdf"), add_pdf),
+                      CommandHandler("title", set_title),
+                      ],
+            ConversationHandler.TIMEOUT: [MessageHandler(Filters.all, done)],
+        },
+        fallbacks=[CommandHandler("done", done)],
+        conversation_timeout=60,
+    )
+
+    dp.add_handler(conv_handler)
 
     # on different commands - answer in Telegram
     dp.add_handler(CommandHandler("start", start))
