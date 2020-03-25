@@ -16,7 +16,10 @@ import logging
 import uuid
 import shutil
 
+import piexif
 import img2pdf
+from img2pdf import NegativeDimensionError, UnsupportedColorspaceError, ImageOpenError, \
+    JpegColorspaceError, PdfTooLargeError, AlphaChannelError, ExifOrientationError
 from PyPDF2 import PdfFileMerger
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ConversationHandler
 
@@ -37,8 +40,18 @@ def conv_image(file_name, args):
     else:
         layout_fun = img2pdf.get_layout_fun()
 
-    with open(file_name + ".pdf", "wb") as f:
-        f.write(img2pdf.convert(file_name, layout_fun=layout_fun))
+    try:
+        with open(file_name + ".pdf", "wb") as f:
+            f.write(img2pdf.convert(file_name, layout_fun=layout_fun))
+    except ExifOrientationError as e:
+        logger.warning("Error 1: {}".format(e))
+        piexif.remove(file_name)
+        with open(file_name + ".pdf", "wb") as f:
+            f.write(img2pdf.convert(file_name, layout_fun=layout_fun))
+    except (NegativeDimensionError, UnsupportedColorspaceError, ImageOpenError,
+            JpegColorspaceError, PdfTooLargeError, AlphaChannelError, ExifOrientationError) as e:
+        logger.warning("Error 2: {}".format(e))
+        raise
 
     return True
 
@@ -47,7 +60,7 @@ def cleanup(file_name):
     """Cleanup files"""
     os.remove(file_name)
     os.remove(file_name + ".pdf")
-    print("File removed")
+    logger.info("File removed")
 
 
 def get_image(update, context, mode="Single"):
@@ -60,7 +73,7 @@ def get_image(update, context, mode="Single"):
     else:
         temp_name = os.path.join("/mnt/ramdisk", file_id + file_name)
     new_file.download(custom_path=temp_name)
-    print("File saved")
+    logger.info("File saved")
     return file_name, file_desc, temp_name
 
 
@@ -95,13 +108,16 @@ def echo(update, context):
 def convert_image(update, context):
     """Convert the sent image to pdf and send it back."""
     file_name, file_desc, temp_name = get_image(update, context)
-    conv_image(temp_name, file_desc)
-
-    context.bot.send_document(
-        chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), filename=file_name + ".pdf")
-    print("File send")
-
-    cleanup(temp_name)
+    try:
+        conv_image(temp_name, file_desc)
+        context.bot.send_document(
+            chat_id=update.effective_chat.id, document=open(temp_name + ".pdf", 'rb'), filename=file_name + ".pdf")
+        logger.info("File send")
+    except (NegativeDimensionError, UnsupportedColorspaceError, ImageOpenError,
+            JpegColorspaceError, PdfTooLargeError, AlphaChannelError, ExifOrientationError) as e:
+        update.message.reply_text("Invalid Image: {}".format(e))
+    finally:
+        cleanup(temp_name)
 
 
 def info_photo(update, context):
@@ -129,9 +145,15 @@ def join(update, context):
 def add_image(update, context):
     # Do something
     file_name, file_desc, temp_name = get_image(update, context, mode="Folder")
-    conv_image(temp_name, file_desc)
-    os.remove(temp_name)
-    context.chat_data["images"].append(temp_name + ".pdf")
+    try:
+        conv_image(temp_name, file_desc)
+        context.chat_data["images"].append(temp_name + ".pdf")
+    except (NegativeDimensionError, UnsupportedColorspaceError, ImageOpenError,
+            JpegColorspaceError, PdfTooLargeError, AlphaChannelError, ExifOrientationError) as e:
+        update.message.reply_text("Invalid Image: {}".format(e))
+    finally:
+        os.remove(temp_name)
+
     return SENDING
 
 
@@ -154,8 +176,9 @@ def done(update, context):
     chat_data = context.chat_data
     if chat_data is None:
         chat_data = next(iter(context.job.context.dispatcher.chat_data.values()))
-        print("timeout")
-    print(chat_data)
+        logger.info("timeout")
+
+    logger.info(chat_data)
 
     if len(chat_data["images"]) != 0:
         join_pdfs(chat_data["images"], chat_data["idd"])
@@ -163,12 +186,12 @@ def done(update, context):
             chat_id=update.effective_chat.id,
             document=open(os.path.join("/mnt/ramdisk", chat_data["idd"], "result.pdf"), 'rb'),
             filename=chat_data["name"] + ".pdf")
-        print("File send")
+        logger.info("File send")
 
     try:
         shutil.rmtree(chat_data["folder"])
     except OSError as e:
-        print("Error: %s : %s" % (chat_data["folder"], e.strerror))
+        logger.warning("Error: {} : {}".format(chat_data["folder"], e.strerror))
 
     update.message.reply_text("Finished")
     chat_data.clear()
