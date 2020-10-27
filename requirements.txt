@@ -1,6 +1,6 @@
 certifi==2019.11.28
 cffi==1.14.0
-cryptography==2.8
+cryptography==3.2
 decorator==4.4.2
 future==0.18.2
 img2pdf==0.3.3
